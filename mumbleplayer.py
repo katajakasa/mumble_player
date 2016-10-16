@@ -98,11 +98,13 @@ class MumblePlayer(object):
     def connect(self):
         self.mumble.start()
         self.mumble.is_ready()
-        self.mumble.users.myself.comment("Mumble player v0.1")
         self.mumble.users.myself.unmute()
 
     def set_bandwidth(self, bandwidth=200000):
         self.mumble.set_bandwidth(bandwidth)
+
+    def set_comment(self, comment):
+        self.mumble.users.myself.comment(comment)
 
     def join_channel(self, channel):
         self.mumble.channels.find_by_name(channel).move_in()
@@ -147,7 +149,10 @@ class MumblePlayer(object):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Mumble audio player')
+    APP_NAME = 'MumblePlayer'
+    APP_VERSION = '0.1'
+
+    parser = argparse.ArgumentParser(description='{} v{}'.format(APP_NAME, APP_VERSION))
     parser.add_argument('-f', '--file',
                         type=str,
                         dest='filename',
@@ -200,7 +205,7 @@ def main():
                         type=int,
                         help="Bandwidth used for transmission",
                         dest='bandwidth',
-                        default=200000)
+                        default=128000)
     args = parser.parse_args()
 
     # Set correct volume
@@ -248,6 +253,7 @@ def main():
                           key_file=args.keyfile, cert_file=args.certfile)
     player.connect()
     player.set_bandwidth(args.bandwidth)
+    player.set_comment('{} v{}'.format(APP_NAME, APP_VERSION))
     player.join_channel(args.channel)
     try:
         player.play(playlist, volume=args.volume)
