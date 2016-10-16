@@ -75,6 +75,7 @@ class MumblePlayer(object):
                     bytes_position = 0
                     last_updated = 0
                     bps = 2 * f.channels * f.samplerate
+                    ratecv_state = None
                     for buf in f:
                         # Update progressbar when necessary
                         bytes_position += len(buf)
@@ -91,7 +92,7 @@ class MumblePlayer(object):
                         if f.channels != 1:
                             buf = audioop.tomono(buf, 2, 0.5, 0.5)
                         if f.samplerate != 48000:
-                            buf, _ = audioop.ratecv(buf, 2, 1, f.samplerate, 48000, None)
+                            buf, ratecv_state = audioop.ratecv(buf, 2, 1, f.samplerate, 48000, ratecv_state)
                         if volume:
                             buf = audioop.mul(buf, 2, volume)
 
