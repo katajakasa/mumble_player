@@ -57,7 +57,7 @@ class MumblePlayer(object):
         total_songs = len(playlist.files)
         for filename in playlist.files:
             # Formanet nonexistent files.
-            if not os.path.exist(filename):
+            if not os.path.exists(filename):
                 print("File '{}' does not exist, skipping.".format(filename))
                 continue
 
