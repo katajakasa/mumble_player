@@ -4,9 +4,10 @@ A very simple cli for playing audio files and playlist on Mumble channel
 
 # Installation
 
-1. Get [PyMumble](https://github.com/azlux/pymumble) from  and install it manually
-2. pip `install -r requirements.txt`
-3. Run client. See help with `python mumbleplayer.py -h`
+1. Install Python 2.7 and if on windows, make sure the binaries end up in PATH.
+2. Get [PyMumble](https://github.com/azlux/pymumble) from  and install it manually
+3. Run `pip install -r requirements.txt` in project directory
+4. Run client. See help with `python mumbleplayer.py -h`
 
 # Notes
 
