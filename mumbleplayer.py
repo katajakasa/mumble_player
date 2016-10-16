@@ -56,7 +56,14 @@ class MumblePlayer(object):
         song_number = 0
         total_songs = len(playlist.files)
         for filename in playlist.files:
+            # Formanet nonexistent files.
+            if not os.path.exist(filename):
+                print("File '{}' does not exist, skipping.".format(filename))
+                continue
+
+            # Open audio file with audioread module. This may crash if proper decoders are not installed!
             with audioread.audio_open(filename) as f:
+                # TODO: Only show one progress bar, not a new one for every song ?
                 widgets = [
                     '[{}/{}] {}'.format(song_number, total_songs, os.path.basename(filename)),
                     ' ', Bar(left='[', right=']'),
@@ -80,7 +87,7 @@ class MumblePlayer(object):
                         while self.mumble.sound_output.get_buffer_size() > 1.0:
                             time.sleep(0.01)
 
-                        # Convert audio if necessary
+                        # Convert audio if necessary. We want precisely 16bit 48000Hz mono audio for mumble.
                         if f.channels != 1:
                             buf = audioop.tomono(buf, 2, 1, 1)
                         if f.samplerate != 48000:
@@ -104,13 +111,15 @@ def main():
     parser.add_argument('-k', '--keyfile',
                         type=str,
                         dest='keyfile',
+                        metavar="FILE",
                         help='SSL Private key file',
-                        default='key.pem')
+                        default=None)
     parser.add_argument('-e', '--certfile',
                         type=str,
                         dest='certfile',
+                        metavar="FILE",
                         help='SSL Public key file',
-                        default='cert.pem')
+                        default=None)
     parser.add_argument('-a', '--address',
                         type=str,
                         dest='address',
@@ -141,29 +150,56 @@ def main():
                         default=1.0)
     args = parser.parse_args()
 
+    # Set correct volume
     if args.volume < 0.01:
         args.volume = 0.01
     if args.volume > 2.0:
         args.volume = 2.0
 
+    # Make sure public certificate file and key file are both either set or not set (not either or)
+    if bool(args.certfile) != bool(args.keyfile):
+        print("Both cert and keyfiles must be either set or not set, not either-or!")
+        exit(1)
+
+    # Check file existence
+    if args.certfile and not os.path.exists(args.certfile):
+        print("Public certificate file {} does not exist!".format(args.certfile))
+        exit(1)
+    if args.keyfile and not os.path.exists(args.keyfile):
+        print("Private key file {} does not exist!".format(args.keyfile))
+        exit(1)
+    if not os.path.exists(args.filename):
+        print("Audio file {} does not exist!".format(args.filename))
+        exit(1)
+
+    # Print out some info
+    print("Connecting to '{}:{}' as '{}'".format(args.address, args.port, args.username))
+    print("Joining channel '{}'".format(args.channel))
+    print("Playback volume set as '{}'".format(args.volume))
+    if args.certfile and args.keyfile:
+        print("Using certificates:")
+        print(" * Public key = {}".format(args.certfile))
+        print(" * Private key = {}".format(args.keyfile))
+
     # Create a playlist
     playlist = Playlist()
     if os.path.splitext(args.filename)[1] == '.m3u':
         playlist.load_from_file(args.filename)
+        print("Playlist loaded with {} items.".format(len(playlist.files)))
     else:
         playlist.add_file(args.filename)
-    print("Playlist created with {} items.".format(len(playlist.files)))
 
     # Start up the player
     player = MumblePlayer(args.address, args.port,
                           user=args.username, password=args.password,
                           key_file=args.keyfile, cert_file=args.certfile)
+    player.connect()
+    player.join_channel(args.channel)
     try:
-        player.connect()
-        player.join_channel(args.channel)
         player.play(playlist, volume=args.volume)
     except KeyboardInterrupt:
-        print("Playback interrupted.")
+        print("Playback interrupted")
+
 
 if __name__ == '__main__':
     main()
