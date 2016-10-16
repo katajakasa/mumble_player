@@ -10,6 +10,7 @@ import audioop
 import os
 from progressbar import ProgressBar, Bar, Percentage, Timer
 import datetime
+import threading
 
 
 class Playlist(object):
@@ -34,10 +35,62 @@ class Playlist(object):
         self.files.append(filename)
 
 
+class ThreadedStreamer(threading.Thread):
+    def __init__(self, mumble, filename, volume=None):
+        super(ThreadedStreamer, self).__init__()
+        self._run = True
+        self.filename = filename
+        self.mumble = mumble
+        self.volume = volume
+        self.bytes_position = 0
+        self.seconds_position = 0
+        self.seconds_duration = 0
+        self.ready = False
+
+    def wait_ready(self):
+        while not self.ready:
+            time.sleep(0.1)
+
+    def run(self):
+        rate_conversion_state = None
+        # Open audio file with audioread module. This may crash if proper decoders are not installed!
+        with audioread.audio_open(self.filename) as dec:
+            self.seconds_duration = dec.duration
+            bps = 2 * dec.channels * dec.samplerate
+            self.ready = True
+            for buf in dec:
+                # Wait if there is no need to fill the buffer
+                while self.mumble.sound_output.get_buffer_size() > 2.0 and self._run:
+                    time.sleep(0.01)
+
+                # If we want the thread killed, just return here. All done.
+                if not self._run:
+                    return
+
+                # Update position
+                self.bytes_position += len(buf)
+                self.seconds_position = self.bytes_position / bps
+
+                # Convert audio if necessary. We want precisely 16bit 48000Hz mono audio for mumble.
+                if dec.channels != 1:
+                    buf = audioop.tomono(buf, 2, 0.5, 0.5)
+                if dec.samplerate != 48000:
+                    buf, rate_conversion_state = audioop.ratecv(buf, 2, 1, dec.samplerate, 48000, rate_conversion_state)
+                if self.volume:
+                    buf = audioop.mul(buf, 2, self.volume)
+
+                # Insert to mumble buffer
+                self.mumble.sound_output.add_sound(buf)
+
+    def stop(self):
+        self._run = False
+
+
 class MumblePlayer(object):
     def __init__(self, host, port, user, password=None, key_file=None, cert_file=None):
         self.host = host
         self.port = port
+        self.player_thread = None
         self.mumble = pymumble.Mumble(host, port=port,
                                       user=user, password=password,
                                       keyfile=key_file, certfile=cert_file)
@@ -47,13 +100,15 @@ class MumblePlayer(object):
         self.mumble.is_ready()
         self.mumble.users.myself.comment("Mumble player v0.1")
         self.mumble.users.myself.unmute()
-        self.mumble.set_bandwidth(200000)
+
+    def set_bandwidth(self, bandwidth=200000):
+        self.mumble.set_bandwidth(bandwidth)
 
     def join_channel(self, channel):
         self.mumble.channels.find_by_name(channel).move_in()
 
     def play(self, playlist, volume=None):
-        song_number = 0
+        song_number = 1
         total_songs = len(playlist.files)
         for filename in playlist.files:
             # Disregard nonexistent files.
@@ -61,44 +116,34 @@ class MumblePlayer(object):
                 print("File '{}' does not exist, skipping.".format(filename))
                 continue
 
-            # Open audio file with audioread module. This may crash if proper decoders are not installed!
-            with audioread.audio_open(filename) as f:
-                # TODO: Only show one progress bar, not a new one for every song ?
-                widgets = [
-                    '[{}/{}] {}'.format(song_number, total_songs, os.path.basename(filename)),
-                    ' ', Bar(left='[', right=']'),
-                    ' ', Percentage(),
-                    ' ', Timer(),
-                    ' of ', str(datetime.timedelta(seconds=f.duration)).split('.', 2)[0]
-                ]
-                with ProgressBar(max_value=f.duration, widgets=widgets) as progress:
-                    bytes_position = 0
-                    last_updated = 0
-                    bps = 2 * f.channels * f.samplerate
-                    ratecv_state = None
-                    for buf in f:
-                        # Update progressbar when necessary
-                        bytes_position += len(buf)
-                        sec_position = bytes_position / bps
-                        if int(sec_position) > last_updated:
-                            progress.update(sec_position)
-                            last_updated = int(sec_position)
+            # Start up the player thread
+            self.player_thread = ThreadedStreamer(self.mumble, filename, volume=volume)
+            self.player_thread.start()
+            self.player_thread.wait_ready()
 
-                        # Wait if there is no need to fill the buffer
-                        while self.mumble.sound_output.get_buffer_size() > 1.0:
-                            time.sleep(0.01)
+            # Just show progress bar until the song is done
+            widgets = [
+                '[{}/{}] {}'.format(song_number, total_songs, os.path.basename(filename)),
+                ' ', Bar(left='[', right=']'),
+                ' ', Percentage(),
+                ' ', Timer(format='%(elapsed)s'),
+                ' of ', str(datetime.timedelta(seconds=self.player_thread.seconds_duration)).split('.', 2)[0]
+            ]
+            with ProgressBar(max_value=self.player_thread.seconds_duration, widgets=widgets) as progress:
+                while self.player_thread.is_alive():
+                    progress.update(self.player_thread.seconds_position)
+                    time.sleep(0.1)
 
-                        # Convert audio if necessary. We want precisely 16bit 48000Hz mono audio for mumble.
-                        if f.channels != 1:
-                            buf = audioop.tomono(buf, 2, 0.5, 0.5)
-                        if f.samplerate != 48000:
-                            buf, ratecv_state = audioop.ratecv(buf, 2, 1, f.samplerate, 48000, ratecv_state)
-                        if volume:
-                            buf = audioop.mul(buf, 2, volume)
-
-                        # Insert to mumble buffer
-                        self.mumble.sound_output.add_sound(buf)
+            self.player_thread.stop()
+            self.player_thread.join()
+            self.player_thread = None
             song_number += 1
+
+    def stop(self):
+        if self.player_thread:
+            self.player_thread.stop()
+            self.player_thread.join()
+            self.player_thread = None
 
 
 def main():
@@ -107,7 +152,7 @@ def main():
                         type=str,
                         dest='filename',
                         metavar="FILE",
-                        help='Audio file',
+                        help='Audio or m3u playlist file',
                         required=True)
     parser.add_argument('-k', '--keyfile',
                         type=str,
@@ -124,12 +169,12 @@ def main():
     parser.add_argument('-a', '--address',
                         type=str,
                         dest='address',
-                        help='Address',
+                        help='Mumble server address',
                         default='localhost')
     parser.add_argument('-P', '--port',
                         type=int,
                         dest='port',
-                        help='Port',
+                        help='Mumble server port',
                         default=64738)
     parser.add_argument('-u', '--username',
                         type=str,
@@ -143,12 +188,19 @@ def main():
                         default=None)
     parser.add_argument('-c', '--channel',
                         type=str,
+                        help="Mumble channel to join",
                         dest='channel',
                         required=True)
     parser.add_argument('-v', '--volume',
                         type=float,
                         dest='volume',
+                        help="Playback volume, defaults to 1.0",
                         default=1.0)
+    parser.add_argument('-b', '--bandwidth',
+                        type=int,
+                        help="Bandwidth used for transmission",
+                        dest='bandwidth',
+                        default=200000)
     args = parser.parse_args()
 
     # Set correct volume
@@ -159,7 +211,7 @@ def main():
 
     # Make sure public certificate file and key file are both either set or not set (not either or)
     if bool(args.certfile) != bool(args.keyfile):
-        print("Both cert and keyfiles must be either set or not set, not either-or!")
+        print("Both cert and key files must be either set or not set, not either-or!")
         exit(1)
 
     # Check file existence
@@ -195,11 +247,15 @@ def main():
                           user=args.username, password=args.password,
                           key_file=args.keyfile, cert_file=args.certfile)
     player.connect()
+    player.set_bandwidth(args.bandwidth)
     player.join_channel(args.channel)
     try:
         player.play(playlist, volume=args.volume)
     except KeyboardInterrupt:
+        player.stop()
         print("Playback interrupted")
+    except:
+        player.stop()
 
 
 if __name__ == '__main__':
