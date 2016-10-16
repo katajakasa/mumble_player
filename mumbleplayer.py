@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import argparse
 import pymumble
+from pymumble.constants import PYMUMBLE_CONN_STATE_FAILED
 import audioread
 import time
 import audioop
@@ -15,6 +16,10 @@ import threading
 
 APP_NAME = 'MumblePlayer'
 APP_VERSION = '0.1'
+
+
+class PlayerException(Exception):
+    pass
 
 
 class Playlist(object):
@@ -64,7 +69,7 @@ class ThreadedStreamer(threading.Thread):
 
     def run(self):
         rate_conversion_state = None
-        # Open audio file with audioread module. This may crash if proper decoders are not installed!
+        # Open audio file with Audioread module. This may crash if proper decoders are not installed!
         with audioread.audio_open(self.filename) as dec:
             self.seconds_duration = dec.duration
             bps = 2 * dec.channels * dec.samplerate
@@ -73,8 +78,6 @@ class ThreadedStreamer(threading.Thread):
                 # Wait if there is no need to fill the buffer
                 while self.mumble.sound_output.get_buffer_size() > 2.0 and self._run:
                     time.sleep(0.01)
-
-                # If we want the thread killed, just return here. All done.
                 if not self._run:
                     return
 
@@ -102,14 +105,17 @@ class MumblePlayer(object):
         self.host = host
         self.port = port
         self.player_thread = None
-        self.mumble = pymumble.Mumble(host, port=port,
+        self.mumble = pymumble.Mumble(host, port=port, reconnect=True,
                                       user=user, password=password,
                                       keyfile=key_file, certfile=cert_file)
 
     def connect(self):
         self.mumble.start()
         self.mumble.is_ready()
+        if self.mumble.connected == PYMUMBLE_CONN_STATE_FAILED:
+            raise PlayerException("Connection failed")
         self.mumble.users.myself.unmute()
+        self.mumble.sound_output.set_audio_per_packet(0.04)  # We want to send big packages since latency doesnt matter
 
     def set_bandwidth(self, bandwidth=200000):
         self.mumble.set_bandwidth(bandwidth)
@@ -271,10 +277,19 @@ def main():
     player = MumblePlayer(args.address, args.port,
                           user=args.username, password=args.password,
                           key_file=args.keyfile, cert_file=args.certfile)
-    player.connect()
+
+    # Attempt to connect; fail here if something goes wrong
+    try:
+        player.connect()
+    except PlayerException as e:
+        print("Error: {}".format(str(e)))
+        exit(0)
+
     player.set_bandwidth(args.bandwidth)
     player.set_comment('{} v{}'.format(APP_NAME, APP_VERSION))
     player.join_channel(args.channel)
+
+    # Start playback, loop if necessary. If something goes wrong, remember to kill the thread!
     try:
         while True:
             if args.shuffle:
@@ -285,8 +300,9 @@ def main():
     except KeyboardInterrupt:
         player.stop()
         print("Playback interrupted")
-    except:
+    except:  # We want to be sure to kill the thread, just re-raise after that.
         player.stop()
+        raise
 
 if __name__ == '__main__':
     main()
