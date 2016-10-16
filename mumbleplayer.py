@@ -89,7 +89,7 @@ class MumblePlayer(object):
 
                         # Convert audio if necessary. We want precisely 16bit 48000Hz mono audio for mumble.
                         if f.channels != 1:
-                            buf = audioop.tomono(buf, 2, 1, 1)
+                            buf = audioop.tomono(buf, 2, 0.5, 0.5)
                         if f.samplerate != 48000:
                             buf, _ = audioop.ratecv(buf, 2, 1, f.samplerate, 48000, None)
                         if volume:
