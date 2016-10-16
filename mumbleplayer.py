@@ -10,7 +10,11 @@ import audioop
 import os
 from progressbar import ProgressBar, Bar, Percentage, Timer
 import datetime
+import random
 import threading
+
+APP_NAME = 'MumblePlayer'
+APP_VERSION = '0.1'
 
 
 class Playlist(object):
@@ -37,6 +41,9 @@ class Playlist(object):
         else:
             rel_base_path = os.path.dirname(os.path.abspath(__name__))
             self.files.append(os.path.join(rel_base_path, filename))
+
+    def shuffle(self):
+        random.shuffle(self.files)
 
 
 class ThreadedStreamer(threading.Thread):
@@ -83,7 +90,7 @@ class ThreadedStreamer(threading.Thread):
                 if self.volume:
                     buf = audioop.mul(buf, 2, self.volume)
 
-                # Insert to mumble buffer
+                # Insert to mumble outgoing buffer
                 self.mumble.sound_output.add_sound(buf)
 
     def stop(self):
@@ -117,12 +124,12 @@ class MumblePlayer(object):
         song_number = 1
         total_songs = len(playlist.files)
         for filename in playlist.files:
-            # Disregard nonexistent files.
+            # Disregard nonexistent files; we don't want to crash
             if not os.path.exists(filename):
                 print("File '{}' does not exist, skipping.".format(filename))
                 continue
 
-            # Start up the player thread
+            # Start up the player thread. Make sure its member vars contain useful information.
             self.player_thread = ThreadedStreamer(self.mumble, filename, volume=volume)
             self.player_thread.start()
             self.player_thread.wait_ready()
@@ -153,9 +160,6 @@ class MumblePlayer(object):
 
 
 def main():
-    APP_NAME = 'MumblePlayer'
-    APP_VERSION = '0.1'
-
     parser = argparse.ArgumentParser(description='{} v{}'.format(APP_NAME, APP_VERSION))
     parser.add_argument('-f', '--file',
                         type=str,
@@ -210,9 +214,17 @@ def main():
                         help="Bandwidth used for transmission",
                         dest='bandwidth',
                         default=128000)
+    parser.add_argument('-l', '--loop',
+                        action='store_true',
+                        help="Loop the playlist",
+                        dest='loop')
+    parser.add_argument('-s', '--shuffle',
+                        action='store_true',
+                        help="Shuffle the playlist (on each loop)",
+                        dest='shuffle')
     args = parser.parse_args()
 
-    # Set correct volume
+    # Set some volume limits -- we don't want to accidentally break anybodys ears.
     if args.volume < 0.01:
         args.volume = 0.01
     if args.volume > 2.0:
@@ -238,6 +250,10 @@ def main():
     print("Connecting to '{}:{}' as '{}'".format(args.address, args.port, args.username))
     print("Joining channel '{}'".format(args.channel))
     print("Playback volume set as '{}'".format(args.volume))
+    if args.loop:
+        print("Playlist will be looped")
+    if args.shuffle:
+        print("Playlist will be shuffled on each loop" if args.loop else "Playlist will be shuffled")
     if args.certfile and args.keyfile:
         print("Using certificates:")
         print(" * Public key = {}".format(args.certfile))
@@ -260,13 +276,17 @@ def main():
     player.set_comment('{} v{}'.format(APP_NAME, APP_VERSION))
     player.join_channel(args.channel)
     try:
-        player.play(playlist, volume=args.volume)
+        while True:
+            if args.shuffle:
+                playlist.shuffle()
+            player.play(playlist, volume=args.volume)
+            if not args.loop:
+                break
     except KeyboardInterrupt:
         player.stop()
         print("Playback interrupted")
     except:
         player.stop()
-
 
 if __name__ == '__main__':
     main()
