@@ -32,7 +32,11 @@ class Playlist(object):
                     self.files.append(os.path.join(rel_base_path, row))
 
     def add_file(self, filename):
-        self.files.append(filename)
+        if os.path.isabs(filename):
+            self.files.append(filename)
+        else:
+            rel_base_path = os.path.dirname(os.path.abspath(__name__))
+            self.files.append(os.path.join(rel_base_path, filename))
 
 
 class ThreadedStreamer(threading.Thread):
